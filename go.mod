@@ -1,4 +1,4 @@
-module github.com/jasonsimons/packer-plugin-psrp
+module github.com/smnsjas/packer-psrp-communicator
 
 go 1.25.0
 

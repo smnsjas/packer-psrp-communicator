@@ -16,8 +16,8 @@ GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
 # Build flags
-LDFLAGS=-ldflags="-X github.com/jasonsimons/packer-plugin-psrp/version.Version=$(VERSION) \
-                   -X github.com/jasonsimons/packer-plugin-psrp/version.VersionPrerelease=$(VERSION_PRERELEASE)"
+LDFLAGS=-ldflags="-X github.com/smnsjas/packer-psrp-communicator/version.Version=$(VERSION) \
+                   -X github.com/smnsjas/packer-psrp-communicator/version.VersionPrerelease=$(VERSION_PRERELEASE)"
 
 all: build
 

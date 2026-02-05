@@ -13,7 +13,7 @@ import (
 	"os"
 
 	"github.com/hashicorp/packer-plugin-sdk/plugin"
-	"github.com/jasonsimons/packer-plugin-psrp/version"
+	"github.com/smnsjas/packer-psrp-communicator/version"
 )
 
 func main() {

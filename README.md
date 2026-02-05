@@ -15,7 +15,7 @@ A Go library that implements a PowerShell Remoting Protocol (PSRP) communicator 
 ### Install
 
 ```bash
-go get github.com/jasonsimons/packer-plugin-psrp@latest
+go get github.com/smnsjas/packer-psrp-communicator@latest
 ```
 
 ### Wire into CustomConnect
@@ -26,7 +26,7 @@ The SDK's `communicator.StepConnect` has a `CustomConnect map[string]multistep.S
 import (
     "github.com/hashicorp/packer-plugin-sdk/communicator"
     "github.com/hashicorp/packer-plugin-sdk/multistep"
-    "github.com/jasonsimons/packer-plugin-psrp/communicator/psrp"
+    "github.com/smnsjas/packer-psrp-communicator/communicator/psrp"
 )
 
 // In your builder's Run() method, when building the step sequence:
