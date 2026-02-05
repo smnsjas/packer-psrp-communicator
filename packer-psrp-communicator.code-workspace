@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../packer-plugin-hyperv"
+		}
+	],
+	"settings": {}
+}
