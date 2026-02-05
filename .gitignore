@@ -1,0 +1,62 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+packer-plugin-psrp
+packer-plugin-*
+psrp-example
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Build artifacts
+dist/
+build/
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Packer cache
+packer_cache/
+*.box
+
+# Crash logs
+crash.log
+
+# Test artifacts
+*.tfstate
+*.tfstate.*
+
+# Temporary files
+*.tmp
+tmp/
+
+# Environment variables
+.env
+.env.local
+
+# Example/test credentials (if any)
+examples/secrets/
+examples/*.auto.pkrvars.hcl
+
+# Agents
+AGENTS.md
+CLAUDE.md
