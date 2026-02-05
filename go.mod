@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/hashicorp/packer-plugin-sdk v0.5.4
 	github.com/smnsjas/go-psrp v0.2.0
+	github.com/smnsjas/go-psrpcore v0.0.0-20251230190552-63d922dacbb3
 )
 
 require (
@@ -20,7 +21,7 @@ require (
 	github.com/cenkalti/backoff/v3 v3.2.2 // indirect
 	github.com/fatih/color v1.16.0 // indirect
 	github.com/go-crypt/x v0.4.10 // indirect
-	github.com/go-jose/go-jose/v4 v4.0.1 // indirect
+	github.com/go-jose/go-jose/v4 v4.0.5 // indirect
 	github.com/go-krb5/krb5 v0.0.0-20251226122733-d0288459fc25 // indirect
 	github.com/go-krb5/x v0.3.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -31,7 +32,7 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/hashicorp/go-retryablehttp v0.7.6 // indirect
+	github.com/hashicorp/go-retryablehttp v0.7.7 // indirect
 	github.com/hashicorp/go-rootcerts v1.0.2 // indirect
 	github.com/hashicorp/go-safetemp v1.0.0 // indirect
 	github.com/hashicorp/go-secure-stdlib/parseutil v0.1.6 // indirect
@@ -56,9 +57,8 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.0 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
-	github.com/smnsjas/go-psrpcore v0.0.0-20251230190552-63d922dacbb3 // indirect
 	github.com/ugorji/go/codec v1.2.6 // indirect
-	github.com/ulikunitz/xz v0.5.10 // indirect
+	github.com/ulikunitz/xz v0.5.14 // indirect
 	github.com/zclconf/go-cty v1.13.3 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/exp v0.0.0-20230321023759-10a507213a29 // indirect
