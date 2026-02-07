@@ -14,7 +14,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"log"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/packer-plugin-sdk/packer"
 	"github.com/smnsjas/go-psrp/client"
@@ -26,6 +28,7 @@ import (
 type Communicator struct {
 	client *client.Client
 	config *Config
+	target string
 }
 
 func (c *Communicator) opContext() (context.Context, context.CancelFunc) {
@@ -47,6 +50,7 @@ func New(target string, config *Config) (*Communicator, error) {
 	return &Communicator{
 		client: psrpClient,
 		config: config,
+		target: target,
 	}, nil
 }
 
@@ -56,6 +60,43 @@ func (c *Communicator) Connect(ctx context.Context) error {
 		return fmt.Errorf("failed to connect to PSRP endpoint: %w", err)
 	}
 	return nil
+}
+
+// reconnect closes the existing connection and establishes a new one.
+// It retries with polling to handle VM reboots where the OS is temporarily
+// unavailable. Retries every 10 seconds until successful or ctx is cancelled.
+func (c *Communicator) reconnect(ctx context.Context) error {
+	// Best-effort close of stale connection
+	closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_ = c.client.Close(closeCtx)
+
+	retryInterval := 10 * time.Second
+	attempt := 0
+
+	for {
+		attempt++
+		psrpConfig := c.config.ToGoPSRPConfig()
+		newClient, err := client.New(c.target, psrpConfig)
+		if err != nil {
+			log.Printf("[DEBUG] PSRP reconnect attempt %d: failed to create client: %v", attempt, err)
+		} else {
+			if err := newClient.Connect(ctx); err != nil {
+				log.Printf("[DEBUG] PSRP reconnect attempt %d: connection failed: %v", attempt, err)
+			} else {
+				log.Printf("[DEBUG] PSRP reconnected after %d attempt(s)", attempt)
+				c.client = newClient
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("reconnect timed out after %d attempts (last error: %v)", attempt, err)
+		case <-time.After(retryInterval):
+			// Try again
+		}
+	}
 }
 
 // deserializeMessage extracts deserialized objects from a PSRP message.
@@ -93,7 +134,14 @@ Write-Output "%s$ec"
 
 	streamResult, err := c.client.ExecuteStream(ctx, wrappedCmd)
 	if err != nil {
-		return fmt.Errorf("failed to start PSRP command: %w", err)
+		log.Printf("[DEBUG] PSRP command failed, attempting reconnect: %v", err)
+		if reconnErr := c.reconnect(ctx); reconnErr != nil {
+			return fmt.Errorf("failed to start PSRP command: %w (reconnect also failed: %v)", err, reconnErr)
+		}
+		streamResult, err = c.client.ExecuteStream(ctx, wrappedCmd)
+		if err != nil {
+			return fmt.Errorf("failed to start PSRP command after reconnect: %w", err)
+		}
 	}
 
 	go func() {
@@ -214,7 +262,14 @@ func (c *Communicator) Upload(path string, input io.Reader, fi *os.FileInfo) err
 
 	result, err := c.client.Execute(ctx, script)
 	if err != nil {
-		return fmt.Errorf("failed to upload file to %s: %w", path, err)
+		log.Printf("[DEBUG] PSRP upload failed, attempting reconnect: %v", err)
+		if reconnErr := c.reconnect(ctx); reconnErr != nil {
+			return fmt.Errorf("failed to upload file to %s: %w (reconnect also failed: %v)", path, err, reconnErr)
+		}
+		result, err = c.client.Execute(ctx, script)
+		if err != nil {
+			return fmt.Errorf("failed to upload file to %s after reconnect: %w", path, err)
+		}
 	}
 
 	if result.HadErrors {
@@ -279,7 +334,14 @@ func (c *Communicator) Download(path string, output io.Writer) error {
 
 	result, err := c.client.Execute(ctx, script)
 	if err != nil {
-		return fmt.Errorf("failed to download file from %s: %w", path, err)
+		log.Printf("[DEBUG] PSRP download failed, attempting reconnect: %v", err)
+		if reconnErr := c.reconnect(ctx); reconnErr != nil {
+			return fmt.Errorf("failed to download file from %s: %w (reconnect also failed: %v)", path, err, reconnErr)
+		}
+		result, err = c.client.Execute(ctx, script)
+		if err != nil {
+			return fmt.Errorf("failed to download file from %s after reconnect: %w", path, err)
+		}
 	}
 
 	if result.HadErrors {
@@ -325,7 +387,14 @@ func (c *Communicator) DownloadDir(src string, dst string, exclude []string) err
 
 	result, err := c.client.Execute(ctx, script)
 	if err != nil {
-		return fmt.Errorf("failed to list directory contents: %w", err)
+		log.Printf("[DEBUG] PSRP directory listing failed, attempting reconnect: %v", err)
+		if reconnErr := c.reconnect(ctx); reconnErr != nil {
+			return fmt.Errorf("failed to list directory contents: %w (reconnect also failed: %v)", err, reconnErr)
+		}
+		result, err = c.client.Execute(ctx, script)
+		if err != nil {
+			return fmt.Errorf("failed to list directory contents after reconnect: %w", err)
+		}
 	}
 
 	if result.HadErrors {

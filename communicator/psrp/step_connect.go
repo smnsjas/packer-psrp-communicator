@@ -60,7 +60,11 @@ func (s *StepConnect) Run(ctx context.Context, state multistep.StateBag) multist
 		return multistep.ActionHalt
 	}
 
-	ui.Say(fmt.Sprintf("Connecting to PSRP endpoint at %s:%d...", host, s.Config.PSRPPort))
+	if s.Config.PSRPTransport == TransportHvSocket {
+		ui.Say(fmt.Sprintf("Connecting to PSRP endpoint via HvSocket (VM: %s)...", host))
+	} else {
+		ui.Say(fmt.Sprintf("Connecting to PSRP endpoint at %s:%d...", host, s.Config.PSRPPort))
+	}
 
 	// Create the communicator
 	s.comm, err = New(host, s.Config)
@@ -100,12 +104,8 @@ func (s *StepConnect) Run(ctx context.Context, state multistep.StateBag) multist
 // waitForPSRP attempts to connect with retry logic until successful or timeout.
 func (s *StepConnect) waitForPSRP(ctx context.Context, ui packersdk.Ui) error {
 	var lastErr error
-	retryDelay := 5 * time.Second
-	maxRetryDelay := 30 * time.Second
+	retryInterval := 10 * time.Second
 	attempt := 0
-
-	ticker := time.NewTicker(retryDelay)
-	defer ticker.Stop()
 
 	// Try immediately first
 	if err := s.comm.Connect(ctx); err == nil {
@@ -114,6 +114,9 @@ func (s *StepConnect) waitForPSRP(ctx context.Context, ui packersdk.Ui) error {
 		lastErr = err
 		log.Printf("[DEBUG] Initial PSRP connection failed: %v", err)
 	}
+
+	ticker := time.NewTicker(retryInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -134,13 +137,6 @@ func (s *StepConnect) waitForPSRP(ctx context.Context, ui packersdk.Ui) error {
 
 			lastErr = err
 			log.Printf("[DEBUG] PSRP connection attempt %d failed: %v", attempt, err)
-
-			// Exponential backoff with max delay
-			retryDelay = retryDelay * 2
-			if retryDelay > maxRetryDelay {
-				retryDelay = maxRetryDelay
-			}
-			ticker.Reset(retryDelay)
 		}
 	}
 }
