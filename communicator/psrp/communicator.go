@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"log"
@@ -112,9 +113,80 @@ func deserializeMessage(msg *messages.Message) string {
 	}
 	var parts []string
 	for _, r := range results {
-		parts = append(parts, fmt.Sprintf("%v", r))
+		parts = append(parts, psObjectToString(r))
 	}
 	return strings.Join(parts, "\n")
+}
+
+// psObjectToString extracts a human-readable string from a deserialized PSRP object.
+// Handles PSObject types (InformationRecord, ErrorRecord, WarningRecord, etc.) by
+// extracting the actual message text rather than printing the Go struct representation.
+func psObjectToString(v interface{}) string {
+	obj, ok := v.(*serialization.PSObject)
+	if !ok {
+		return fmt.Sprintf("%v", v)
+	}
+
+	// InformationRecord (from Write-Host): message is in MessageData property.
+	// The MessageData is typically a HostInformationMessage PSObject with a
+	// "Message" property containing the actual text.
+	if msgData, exists := obj.Properties["MessageData"]; exists {
+		if inner, ok := msgData.(*serialization.PSObject); ok {
+			if msg, ok := inner.Properties["Message"]; ok {
+				return fmt.Sprintf("%v", msg)
+			}
+			if inner.ToString != "" {
+				return inner.ToString
+			}
+		}
+		return fmt.Sprintf("%v", msgData)
+	}
+
+	// ErrorRecord: extract Exception.Message and optional InvocationInfo for context.
+	// ErrorRecord structure: Exception (PSObject with Message), InvocationInfo
+	// (PSObject with ScriptLineNumber, PositionMessage), FullyQualifiedErrorId.
+	if exception, exists := obj.Properties["Exception"]; exists {
+		var errMsg string
+		if exObj, ok := exception.(*serialization.PSObject); ok {
+			if msg, ok := exObj.Properties["Message"]; ok {
+				errMsg = fmt.Sprintf("%v", msg)
+			} else if exObj.ToString != "" && exObj.ToString != "PSObject" {
+				errMsg = exObj.ToString
+			}
+		}
+		if errMsg == "" {
+			errMsg = fmt.Sprintf("%v", exception)
+		}
+		// Append script location if available
+		if invInfo, exists := obj.Properties["InvocationInfo"]; exists {
+			if invObj, ok := invInfo.(*serialization.PSObject); ok {
+				if pos, ok := invObj.Properties["PositionMessage"]; ok {
+					posStr := fmt.Sprintf("%v", pos)
+					if posStr != "" && posStr != "PSObject" {
+						errMsg += "\n" + posStr
+					}
+				}
+			}
+		}
+		return errMsg
+	}
+
+	// Use ToString if meaningful (not the default "PSObject")
+	if obj.ToString != "" && obj.ToString != "PSObject" {
+		return obj.ToString
+	}
+
+	// WarningRecord and other types with a direct Message property
+	if msg, exists := obj.Properties["Message"]; exists {
+		return fmt.Sprintf("%v", msg)
+	}
+
+	// Last resort
+	if obj.ToString != "" {
+		return obj.ToString
+	}
+
+	return fmt.Sprintf("%v", v)
 }
 
 // Start takes a RemoteCmd and starts executing it remotely.
@@ -122,15 +194,43 @@ func deserializeMessage(msg *messages.Message) string {
 func (c *Communicator) Start(ctx context.Context, cmd *packer.RemoteCmd) error {
 	const exitMarker = "__PACKER_EXIT_CODE__:"
 
+	// Build normalization preamble for any .ps1 files referenced in the command.
+	// PowerShell 5.1 can't parse certain constructs (try/catch, if/else) in
+	// files with LF-only line endings. This normalizes them to CRLF on the VM.
+	var normPreamble string
+	re := regexp.MustCompile(`'([^']+\.ps1)'`)
+	matches := re.FindAllStringSubmatch(cmd.Command, -1)
+	log.Printf("[DEBUG] PSRP CRLF normalization: found %d .ps1 paths in command", len(matches))
+	for _, match := range matches {
+		p := strings.ReplaceAll(match[1], "'", "''")
+		log.Printf("[DEBUG] PSRP CRLF normalization: will normalize %s", p)
+		// Read script, normalize LF→CRLF, write back. Always normalize
+		// (double-replace is safe for any input). Diagnostic output via stdout.
+		normPreamble += "$__f='" + p + "'\n" +
+			"$__t=[IO.File]::ReadAllText($__f)\n" +
+			"$__t=$__t -replace \"`r`n\",\"`n\" -replace \"`n\",\"`r`n\"\n" +
+			"[IO.File]::WriteAllText($__f,$__t,[System.Text.Encoding]::UTF8)\n"
+	}
+
 	wrappedCmd := fmt.Sprintf(`& {
+%s$__packerErr = $null
+try {
 %s
-$ec = if ($?) {
+} catch {
+$__packerErr = $_
+Write-Output ("ERROR: " + $_.Exception.Message)
+if ($_.ScriptStackTrace) { Write-Output ("STACK: " + $_.ScriptStackTrace) }
+if ($_.InvocationInfo.PositionMessage) { Write-Output $_.InvocationInfo.PositionMessage }
+}
+$ec = if ($__packerErr) {
+	if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { $LASTEXITCODE } else { 1 }
+} elseif ($?) {
 	if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
 } else {
 	if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 1 }
 }
 Write-Output "%s$ec"
-}`, cmd.Command, exitMarker)
+}`, normPreamble, cmd.Command, exitMarker)
 
 	streamResult, err := c.client.ExecuteStream(ctx, wrappedCmd)
 	if err != nil {
@@ -190,10 +290,28 @@ Write-Output "%s$ec"
 				mu.Lock()
 				hadErrors = true
 				mu.Unlock()
-				if w != nil {
-					text := deserializeMessage(msg)
-					if text != "" {
-						fmt.Fprintln(w, text)
+				text := deserializeMessage(msg)
+				log.Printf("[DEBUG] PSRP error stream message (len=%d): %q", len(text), text)
+				if w != nil && text != "" {
+					fmt.Fprintln(w, text)
+				}
+			}
+		}
+
+		// Log-only drain: writes to PACKER_LOG, not Packer UI.
+		// Matches WinRM behavior where verbose/debug are not transmitted.
+		drainToLog := func(ch <-chan *messages.Message, prefix string) {
+			defer wg.Done()
+			for msg := range ch {
+				if msg == nil {
+					continue
+				}
+				text := deserializeMessage(msg)
+				if text != "" {
+					for _, line := range strings.Split(text, "\n") {
+						if line != "" {
+							log.Printf("[DEBUG] PSRP %s: %s", prefix, line)
+						}
 					}
 				}
 			}
@@ -210,8 +328,8 @@ Write-Output "%s$ec"
 		go drainTo(streamResult.Output, cmd.Stdout)
 		go drainErrors(streamResult.Errors, cmd.Stderr)
 		go drainTo(streamResult.Warnings, cmd.Stderr)
-		go drainTo(streamResult.Verbose, cmd.Stdout)
-		go drainTo(streamResult.Debug, cmd.Stdout)
+		go drainToLog(streamResult.Verbose, "verbose")
+		go drainToLog(streamResult.Debug, "debug")
 		go drainDiscard(streamResult.Progress)
 		go drainTo(streamResult.Information, cmd.Stdout)
 
@@ -246,6 +364,13 @@ func (c *Communicator) Upload(path string, input io.Reader, fi *os.FileInfo) err
 	data, err := io.ReadAll(input)
 	if err != nil {
 		return fmt.Errorf("failed to read input data: %w", err)
+	}
+
+	// Normalize LF to CRLF for PowerShell scripts. PowerShell 5.1 can't
+	// parse certain constructs (try/catch, if/else) with LF-only endings.
+	if strings.HasSuffix(strings.ToLower(path), ".ps1") {
+		data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+		data = bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)

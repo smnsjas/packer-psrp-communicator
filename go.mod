@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/hashicorp/packer-plugin-sdk v0.6.4
 	github.com/smnsjas/go-psrp v0.2.0
-	github.com/smnsjas/go-psrpcore v0.0.0-20251230190552-63d922dacbb3
+	github.com/smnsjas/go-psrpcore v0.0.0-20260209151518-449d513eeaf0
 )
 
 require (
