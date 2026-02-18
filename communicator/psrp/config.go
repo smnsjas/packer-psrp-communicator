@@ -199,8 +199,20 @@ func (c *Config) ToGoPSRPConfig() client.Config {
 	// Advanced settings
 	cfg.IdleTimeout = c.PSRPIdleTimeout
 	cfg.MaxRunspaces = c.PSRPMaxRunspaces
-	cfg.KeepAliveInterval = c.PSRPKeepAliveInterval
 	cfg.RunspaceOpenTimeout = c.PSRPRunspaceOpenTimeout
+
+	// KeepAliveInterval: for HvSocket, default to 20 seconds when not configured.
+	// The go-psrpcore outofproc adapter has a hardcoded 30-second read timeout:
+	// if no PSRP message arrives from the server in 30s, adapter.Read() returns an
+	// error and the runspace pool breaks. The PSRP keepalive (GET_AVAILABLE_RUNSPACES)
+	// causes the server to send AVAILABLE_RUNSPACES responses, which arrive at the
+	// adapter and reset the deadline. Interval must be < 30s to beat the timeout.
+	// 20s provides a 10-second margin.
+	if c.PSRPKeepAliveInterval > 0 {
+		cfg.KeepAliveInterval = c.PSRPKeepAliveInterval
+	} else if c.PSRPTransport == TransportHvSocket {
+		cfg.KeepAliveInterval = 20 * time.Second
+	}
 
 	return cfg
 }
