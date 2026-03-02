@@ -60,3 +60,9 @@ examples/*.auto.pkrvars.hcl
 # Agents
 AGENTS.md
 CLAUDE.md
+*.log
+test-loop*
+psrp_out*
+compare_pypsrp.py
+diff.txt
+go-psrp-project-plan.md
