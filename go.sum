@@ -234,8 +234,6 @@ github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 h1:nn5Wsu0esKSJiIVhscUt
 github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529/go.mod h1:DxrIzT+xaE7yg65j358z/aeFdxmN0P9QXhEzd20vsDc=
 github.com/sirupsen/logrus v1.2.0/go.mod h1:LxeOpSwHxABJmUn/MG1IvRgCAasNZTLOkJPxbbu5VWo=
 github.com/sirupsen/logrus v1.4.2/go.mod h1:tLMulIdttU9McNUspp0xgXVQah82FyeX6MwdIuYE2rE=
-github.com/smnsjas/go-psrp v0.2.0 h1:1dCN3+TzRHQ6AnM4gL26NbrkGxgBUSIxi76RYn168zQ=
-github.com/smnsjas/go-psrp v0.2.0/go.mod h1:bGoUyfvqxOKMc3OIEZst0h4sujikC4mHr3/YyZuzOKc=
 github.com/smnsjas/go-psrpcore v0.0.0-20260209151518-449d513eeaf0 h1:XNJzk4qsdHVs8Ql17DeBNd4FEQ3SZbBQHBckoTqnGao=
 github.com/smnsjas/go-psrpcore v0.0.0-20260209151518-449d513eeaf0/go.mod h1:jQD6DZ5fbdmPO1vajs/lcIzph/HHpPG/nPRkRPG6qCk=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=

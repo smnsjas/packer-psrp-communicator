@@ -8,16 +8,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"log"
 	"sync"
 	"time"
+	"unicode/utf16"
 
 	"github.com/hashicorp/packer-plugin-sdk/packer"
 	"github.com/smnsjas/go-psrp/client"
@@ -33,10 +35,11 @@ type Communicator struct {
 }
 
 func (c *Communicator) opContext() (context.Context, context.CancelFunc) {
+	timeout := 2 * time.Minute
 	if c.config != nil && c.config.PSRPTimeout > 0 {
-		return context.WithTimeout(context.Background(), c.config.PSRPTimeout)
+		timeout = c.config.PSRPTimeout
 	}
-	return context.WithCancel(context.Background())
+	return context.WithTimeout(context.Background(), timeout)
 }
 
 // New creates a new PSRP communicator with the given configuration.
@@ -194,12 +197,30 @@ func psObjectToString(v interface{}) string {
 func (c *Communicator) Start(ctx context.Context, cmd *packer.RemoteCmd) error {
 	const exitMarker = "__PACKER_EXIT_CODE__:"
 
+	// Unwrap encoded commands to prevent child process hangs
+	cmdString := strings.TrimSpace(cmd.Command)
+	if strings.Contains(strings.ToLower(cmdString), "-encodedcommand") {
+		re := regexp.MustCompile(`(?i)^powershell(?:\.exe)?\s+.*?-(?:EncodedCommand|e|enc|ec|en)\s+([A-Za-z0-9+/=]+)$`)
+		matches := re.FindStringSubmatch(cmdString)
+		if len(matches) == 2 {
+			decoded, err := base64.StdEncoding.DecodeString(matches[1])
+			if err == nil && len(decoded)%2 == 0 {
+				chars := make([]uint16, len(decoded)/2)
+				for i := range chars {
+					chars[i] = binary.LittleEndian.Uint16(decoded[i*2 : i*2+2])
+				}
+				cmdString = string(utf16.Decode(chars))
+				log.Printf("[DEBUG] PSRP intercepted -EncodedCommand and decoded its payload")
+			}
+		}
+	}
+
 	// Build normalization preamble for any .ps1 files referenced in the command.
 	// PowerShell 5.1 can't parse certain constructs (try/catch, if/else) in
 	// files with LF-only line endings. This normalizes them to CRLF on the VM.
 	var normPreamble string
 	re := regexp.MustCompile(`'([^']+\.ps1)'`)
-	matches := re.FindAllStringSubmatch(cmd.Command, -1)
+	matches := re.FindAllStringSubmatch(cmdString, -1)
 	log.Printf("[DEBUG] PSRP CRLF normalization: found %d .ps1 paths in command", len(matches))
 	for _, match := range matches {
 		p := strings.ReplaceAll(match[1], "'", "''")
@@ -230,7 +251,7 @@ $ec = if ($__packerErr) {
 	if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 1 }
 }
 Write-Output "%s$ec"
-}`, normPreamble, cmd.Command, exitMarker)
+}`, normPreamble, cmdString, exitMarker)
 
 	streamResult, err := c.client.ExecuteStream(ctx, wrappedCmd)
 	if err != nil {
@@ -254,27 +275,35 @@ Write-Output "%s$ec"
 		// Helper: drain a *messages.Message channel, deserialize, write to writer
 		drainTo := func(ch <-chan *messages.Message, w io.Writer) {
 			defer wg.Done()
-			for msg := range ch {
-				if w == nil || msg == nil {
-					continue
-				}
-				text := deserializeMessage(msg)
-				if text != "" {
-					lines := strings.Split(text, "\n")
-					for i, line := range lines {
-						if strings.HasPrefix(line, exitMarker) {
-							if parsed, parseErr := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, exitMarker))); parseErr == nil {
-								mu.Lock()
-								exitCode = parsed
-								exitCodeSet = true
-								mu.Unlock()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case msg, ok := <-ch:
+					if !ok {
+						return
+					}
+					if w == nil || msg == nil {
+						continue
+					}
+					text := deserializeMessage(msg)
+					if text != "" {
+						lines := strings.Split(text, "\n")
+						for i, line := range lines {
+							if strings.HasPrefix(line, exitMarker) {
+								if parsed, parseErr := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, exitMarker))); parseErr == nil {
+									mu.Lock()
+									exitCode = parsed
+									exitCodeSet = true
+									mu.Unlock()
+								}
+								continue
 							}
-							continue
+							if i == len(lines)-1 && line == "" {
+								continue
+							}
+							fmt.Fprintln(w, line)
 						}
-						if i == len(lines)-1 && line == "" {
-							continue
-						}
-						fmt.Fprintln(w, line)
 					}
 				}
 			}
@@ -283,17 +312,25 @@ Write-Output "%s$ec"
 		// Error channel: same as drainTo but tracks that errors occurred
 		drainErrors := func(ch <-chan *messages.Message, w io.Writer) {
 			defer wg.Done()
-			for msg := range ch {
-				if msg == nil {
-					continue
-				}
-				mu.Lock()
-				hadErrors = true
-				mu.Unlock()
-				text := deserializeMessage(msg)
-				log.Printf("[DEBUG] PSRP error stream message (len=%d): %q", len(text), text)
-				if w != nil && text != "" {
-					fmt.Fprintln(w, text)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case msg, ok := <-ch:
+					if !ok {
+						return
+					}
+					if msg == nil {
+						continue
+					}
+					mu.Lock()
+					hadErrors = true
+					mu.Unlock()
+					text := deserializeMessage(msg)
+					log.Printf("[DEBUG] PSRP error stream message (len=%d): %q", len(text), text)
+					if w != nil && text != "" {
+						fmt.Fprintln(w, text)
+					}
 				}
 			}
 		}
@@ -302,15 +339,23 @@ Write-Output "%s$ec"
 		// Matches WinRM behavior where verbose/debug are not transmitted.
 		drainToLog := func(ch <-chan *messages.Message, prefix string) {
 			defer wg.Done()
-			for msg := range ch {
-				if msg == nil {
-					continue
-				}
-				text := deserializeMessage(msg)
-				if text != "" {
-					for _, line := range strings.Split(text, "\n") {
-						if line != "" {
-							log.Printf("[DEBUG] PSRP %s: %s", prefix, line)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case msg, ok := <-ch:
+					if !ok {
+						return
+					}
+					if msg == nil {
+						continue
+					}
+					text := deserializeMessage(msg)
+					if text != "" {
+						for _, line := range strings.Split(text, "\n") {
+							if line != "" {
+								log.Printf("[DEBUG] PSRP %s: %s", prefix, line)
+							}
 						}
 					}
 				}
@@ -320,7 +365,15 @@ Write-Output "%s$ec"
 		// Drain and discard (e.g., progress records)
 		drainDiscard := func(ch <-chan *messages.Message) {
 			defer wg.Done()
-			for range ch {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case _, ok := <-ch:
+					if !ok {
+						return
+					}
+				}
 			}
 		}
 
